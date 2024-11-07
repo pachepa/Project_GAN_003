@@ -2,6 +2,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import random
+import os
+from mplfinance.original_flavor import candlestick_ohlc
+import matplotlib.dates as mdates
 
 class TradingStrategy:
     def __init__(self, data_path=None):
@@ -65,29 +68,46 @@ class TradingStrategy:
     def macd_sell_signal(self, row):
         return row.MACD < row.Signal_Line
 
-    # --- Backtesting Execution ---
     def execute_trades(self, sl_levels, tp_levels):
         for i, row in self.data.iterrows():
             # Check buy/sell signals for active indicators
             buy_signals = sum([self.indicators[ind]['buy'](row) for ind in self.active_indicators])
             sell_signals = sum([self.indicators[ind]['sell'](row) for ind in self.active_indicators])
 
-            # Execute trade if signals meet criteria
+            # Execute trade if buy signals meet criteria
             if buy_signals >= len(self.active_indicators) // 2:
                 self._open_operation('long', row)
             elif sell_signals >= len(self.active_indicators) // 2 and self.operations:
                 self._close_operations(row)
 
+            # Check if stop-loss or take-profit levels are reached and close positions
+            self._validate_stop_loss_take_profit(row)
+
             # Update portfolio value
-            self.strategy_value.append(self.cash + sum(self._operation_value(op, row['Close']) for op in self.operations))
+            self.strategy_value.append(
+                self.cash + sum(self._operation_value(op, row['Close']) for op in self.operations))
+
+    def _validate_stop_loss_take_profit(self, row):
+        for op in self.operations:
+            if row['Close'] <= op['stop_loss'] or row['Close'] >= op['take_profit']:
+                self.cash += row['Close'] * self.n_shares * (1 - self.commission)
+                self.operations.remove(op)  # Close the operation
 
     def _open_operation(self, operation_type, row):
         stop_loss = row['Close'] * 0.95
         take_profit = row['Close'] * 1.05
-        self.operations.append({'type': operation_type, 'entry_price': row['Close'], 'stop_loss': stop_loss, 'take_profit': take_profit})
+        self.operations.append({
+            'type': operation_type,
+            'Date': row['Date'],
+            'entry_price': row['Close'],
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'n_shares': self.n_shares
+        })
         self.cash -= row['Close'] * self.n_shares * (1 + self.commission)
 
     def _close_operations(self, row):
+        """Close all active operations."""
         for op in self.operations:
             self.cash += row['Close'] * self.n_shares * (1 - self.commission)
         self.operations.clear()
@@ -112,6 +132,7 @@ class Backtesting:
     def __init__(self, historical_data_path, synthetic_data_path):
         self.historical_data = self.load_data(historical_data_path)
         self.synthetic_data = pd.read_csv(synthetic_data_path)
+        self.operations = []
 
     def load_data(self, path):
         data = pd.read_csv(path)
@@ -122,43 +143,39 @@ class Backtesting:
         strategy = TradingStrategy()
         strategy.load_data(data)
         strategy.activate_indicator('RSI')
-        #strategy.activate_indicator('SMA')
-        #strategy.activate_indicator('MACD')
 
         # Set strategy parameters
         strategy.n_shares = shares
         print(f"Running backtest with SL: {sl}, TP: {tp}, Shares: {shares}")
         strategy.execute_trades(sl_levels=[sl], tp_levels=[tp])
 
-        # Capture the final cash balance after executing trades
-        final_cash_balance = strategy.strategy_value[-1]
+        # Capture all portfolio values for plotting
+        portfolio_values = strategy.strategy_value.copy()
+
+        # Reset strategy for reuse
+        final_cash_balance = portfolio_values[-1]
         strategy.operations.clear()
         strategy.cash = 1_000_000
         strategy.strategy_value = [strategy.cash]
 
-        return final_cash_balance
+        return final_cash_balance, portfolio_values
 
     def run_all_sl_tp_variations(self):
-        # Define ranges for SL, TP, and n_shares
-        sl_range = (0.90, 0.99)
-        tp_range = (1.01, 1.10)
-        n_shares_range = (1, 100)
-
         best_final_cash = None
         best_params = {}
+        best_portfolio_values = []
 
-        # Generate 10 random combinations of SL, TP, and n_shares
         for i in range(10):
-            sl = round(random.uniform(*sl_range), 2)  # Random SL in range 0.90 to 0.99
-            tp = round(random.uniform(*tp_range), 2)  # Random TP in range 1.01 to 1.10
-            shares = 100  # Random number of shares from 1 to 100
+            sl = round(random.uniform(0.90, 0.99), 2)
+            tp = round(random.uniform(1.01, 1.10), 2)
+            shares = 100
 
-            # Run backtest with the generated combination
-            final_cash_balance = self.run_backtest_with_sl_tp(self.historical_data, sl, tp, shares)
+            final_cash_balance, portfolio_values = self.run_backtest_with_sl_tp(self.historical_data, sl, tp, shares)
 
             if best_final_cash is None or final_cash_balance > best_final_cash:
                 best_final_cash = final_cash_balance
                 best_params = {'stop_loss_pct': sl, 'take_profit_pct': tp, 'n_shares': shares}
+                best_portfolio_values = portfolio_values
 
         print("Best parameters found:")
         print(f"Stop Loss: {best_params['stop_loss_pct']}")
@@ -166,7 +183,7 @@ class Backtesting:
         print(f"Number of Shares: {best_params['n_shares']}")
         print(f"Final Cash Balance: {best_final_cash}")
 
-        return best_final_cash
+        return best_final_cash, best_portfolio_values
 
     def backtest_synthetic_scenarios(self, num_scenarios=10):
         print(f"Starting backtesting on synthetic data ({num_scenarios} scenarios)...")
@@ -226,43 +243,64 @@ class Backtesting:
             "Win-Loss Ratio": win_loss_ratio
         }
 
+    def save_operations(self, filename='results/operations_list.csv'):
+        if not os.path.exists('results'):
+            os.makedirs('results')
+        operations_df = pd.DataFrame(self.operations)
+        operations_df.to_csv(filename, index=False)
+        print(f"Operations saved to {filename}")
+
+    def plot_strategy_values(self, portfolio_values, dates):
+        if not os.path.exists('plots'):
+            os.makedirs('plots')
+        portfolio_values = portfolio_values[:-1]
+        # Graficar valor del portafolio
+        plt.figure(figsize=(12, 6))
+        plt.plot(dates, portfolio_values, label="Portfolio Value", color="blue")
+        plt.title("Trading Strategy Value Over Time")
+        plt.xlabel("Date")
+        plt.ylabel("Portfolio Value")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig('plots/trading_strat.png')
+        plt.show()
+
+    def plot_candlestick_chart(self, data):
+        if not os.path.exists('plots'):
+            os.makedirs('plots')
+
+        data = data.copy()
+        data['Date_Num'] = mdates.date2num(data['Date'])
+
+        ohlc = data[['Date_Num', 'Open', 'High', 'Low', 'Close']].values
+        fig, ax = plt.subplots(figsize=(12, 6))
+        candlestick_ohlc(ax, ohlc, width=0.6, colorup='green', colordown='red')
+        ax.xaxis_date()
+        ax.set_title('Candlestick Chart')
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Price')
+        plt.grid(True)
+        plt.savefig('plots/candlestick_chart.png')
+        plt.show()
+
+
 def calculate_passive_benchmark(data, initial_cash=1_000_000, strategy_final_cash=None, risk_free_rate=0.0):
     data = data.dropna().sort_values(by='Date')
     first_close = data['Close'].iloc[0]
-    n_shares = initial_cash // first_close
     last_close = data['Close'].iloc[-1]
 
-    # Calculate P&L for passive strategy
-    passive_final_value = data['Close'].iloc[-1] * n_shares
+    # Calculate number of shares bought initially
+    n_shares = initial_cash // first_close
+    passive_final_value = last_close * n_shares
     passive_return = (passive_final_value - initial_cash) / initial_cash
+
+    passive_annualized_return = (1 + passive_return) ** (1 / 252) - 1
 
     # Calculate daily returns for passive strategy
     data['Returns'] = data['Close'].pct_change().fillna(0)
     investment_values = data['Close'] * n_shares
 
-    # Calculate annual Sharpe Ratio for passive strategy
-    annual_sharpe_ratio = (data['Returns'].mean() - risk_free_rate) / data['Returns'].std() * np.sqrt(252) if data[
-                                                                                                                  'Returns'].std() != 0 else 0
-
-    # Calculate Calmar Ratio for passive strategy
-    max_drawdown = (investment_values.min() - investment_values.max()) / investment_values.max()
-    calmar_ratio = passive_return / abs(max_drawdown) if max_drawdown != 0 else 0
-
-    # Calculate Win-Loss Ratio for passive strategy
-    wins = sum(1 for r in data['Returns'] if r > 0)
-    losses = sum(1 for r in data['Returns'] if r < 0)
-    win_loss_ratio = wins / losses if losses > 0 else float('inf')
-
-    # Plot passive performance
-    plt.figure(figsize=(12, 6))
-    plt.plot(data['Date'], data['Close'], label='Closing Price', color='blue')
-    plt.title('Asset Closing Price Over Time')
-    plt.xlabel('Date')
-    plt.ylabel('Closing Price')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-
+    # Plot investment value over time
     plt.figure(figsize=(12, 6))
     plt.plot(data['Date'], investment_values, label='Investment Value (Passive)', color='green')
     plt.title('Passive Investment Performance Over Time')
@@ -270,9 +308,19 @@ def calculate_passive_benchmark(data, initial_cash=1_000_000, strategy_final_cas
     plt.ylabel('Investment Value')
     plt.legend()
     plt.grid(True)
+    plt.savefig('plots/passive_performance_overtime.png')
     plt.show()
 
-    # Print comparison if active strategy final cash is provided
+    # Calculate performance metrics
+    annual_sharpe_ratio = (data['Returns'].mean() - risk_free_rate) / data['Returns'].std() * np.sqrt(252) if data[
+                                                                                                                  'Returns'].std() != 0 else 0
+    max_drawdown = (investment_values.min() - investment_values.max()) / investment_values.max()
+    calmar_ratio = passive_return / abs(max_drawdown) if max_drawdown != 0 else 0
+    wins = sum(1 for r in data['Returns'] if r > 0)
+    losses = sum(1 for r in data['Returns'] if r < 0)
+    win_loss_ratio = wins / losses if losses > 0 else float('inf')
+
+    # Compare to active strategy
     if strategy_final_cash is not None:
         strategy_return = (strategy_final_cash - initial_cash) / initial_cash
         passive_vs_strategy = passive_return - strategy_return
@@ -281,13 +329,11 @@ def calculate_passive_benchmark(data, initial_cash=1_000_000, strategy_final_cas
         return {
             "Passive P&L": passive_final_value - initial_cash,
             "Passive Total Return": passive_return,
+            "Annualized Passive Return": passive_annualized_return,
             "Passive Annual Sharpe Ratio": annual_sharpe_ratio,
             "Passive Calmar Ratio": calmar_ratio,
             "Passive Max Drawdown": max_drawdown,
             "Passive Win-Loss Ratio": win_loss_ratio,
-            "Passive Final Value": passive_final_value,
-            "Strategy Final Value": strategy_final_cash,
-            "Return Difference": passive_vs_strategy
         }
     else:
         return {
@@ -297,5 +343,5 @@ def calculate_passive_benchmark(data, initial_cash=1_000_000, strategy_final_cas
             "Passive Calmar Ratio": calmar_ratio,
             "Passive Max Drawdown": max_drawdown,
             "Passive Win-Loss Ratio": win_loss_ratio,
-            "Passive Final Value": passive_final_value
+            "Passive Final Value": passive_final_value,
         }

@@ -7,6 +7,7 @@ from tensorflow.keras.layers import Dense
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import BinaryCrossentropy
 from utils import Backtesting, calculate_passive_benchmark
+import os
 
 class GANModel:
     def __init__(self, input_dim, sequence_length):
@@ -100,6 +101,9 @@ def main():
     plt.xlabel("Time Steps")
     plt.ylabel("Normalized Price")
     plt.legend()
+    if not os.path.exists('plots'):
+        os.makedirs('plots')
+    plt.savefig('plots/sample_synthetic_paths.png')
     plt.show()
     plt.close()
     print("Synthetic data plotting completed.")
@@ -107,13 +111,27 @@ def main():
     print("Initializing backtester...")
     backtester = Backtesting('cleaned_data_AMZN.csv', 'synthetic_data_AMZN.csv')
 
-    print("Running backtest on historical data with SL/TP variations...")
-    final_cash_active_strategy = backtester.run_all_sl_tp_variations()
-    print("Historical backtest with SL/TP variations completed.")
-
     print("Running backtest on synthetic data scenarios...")
     backtester.backtest_synthetic_scenarios(num_scenarios=100)  # Adjust the number of scenarios as needed
     print("Synthetic scenarios backtest completed.")
+
+    print("Saving operations list...")
+    backtester.save_operations()  # Save the list of operations
+    print("Operations list saved.")
+
+    print("Generating performance plots...")
+    final_cash_active_strategy, best_portfolio_values = backtester.run_all_sl_tp_variations()
+    dates = backtester.historical_data['Date']
+    print("Historical backtest with SL/TP variations completed.")
+
+    # Valores del portafolio y efectivo
+    portfolio_values = best_portfolio_values
+
+    # Graficar los valores del portafolio y efectivo
+    backtester.plot_strategy_values(portfolio_values, dates)
+
+    # Candlestick Chart
+    backtester.plot_candlestick_chart(backtester.historical_data)
 
     print("\nCalculating annual performance metrics for active strategy...")
     strategy_metrics = backtester.calculate_annual_performance(
@@ -130,6 +148,16 @@ def main():
     print("Benchmark Passive Strategy Results:")
     for metric, value in benchmark_metrics.items():
         print(f"  {metric}: {value:.4f}")
+
+    # Save metrics to CSV
+    metrics_table = pd.DataFrame({
+        "Metric": list(strategy_metrics.keys()),
+        "Active Strategy": list(strategy_metrics.values()),
+        "Passive Strategy": list(benchmark_metrics.values())
+    })
+
+    metrics_table.to_csv('results/performance_metrics.csv', index=False)
+    print("Performance metrics saved to 'results/performance_metrics.csv'")
 
 
 if __name__ == "__main__":
