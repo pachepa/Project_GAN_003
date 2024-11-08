@@ -10,11 +10,11 @@ import matplotlib.dates as mdates
 class TradingStrategy:
     def __init__(self):
         self.data = None
-        self.operations = []  # Registro de operaciones
-        self.cash = 1_000_000  # Efectivo inicial
-        self.portfolio_value = [self.cash]  # Histórico de valor del portafolio
-        self.n_shares = 10  # Número de acciones por operación
-        self.commission = 0.00125  # Comisión por operación
+        self.operations = []
+        self.cash = 1_000_000
+        self.portfolio_value = [self.cash]
+        self.n_shares = 100
+        self.commission = 0.00125
         self.active_indicators = []
 
     def load_data(self, data):
@@ -148,7 +148,7 @@ class Backtesting:
                 synthetic_scenario_data,
                 sl=0.95,  # Example stop-loss level for synthetic scenario testing
                 tp=1.05,  # Example take-profit level for synthetic scenario testing
-                shares=50  # Example number of shares for testing
+                shares=100  # Example number of shares for testing
             )
 
             # Save operations for only every nth scenario
@@ -166,7 +166,7 @@ class Backtesting:
         total_return = p_and_l / initial_cash
 
         # Annualized return
-        years = (data['Date'].iloc[-1] - data['Date'].iloc[0]).days / 365.0
+        years = (data['Date'].iloc[-1] - data['Date'].iloc[0]).days / 252
         annualized_return = (1 + total_return) ** (1 / years) - 1
 
         # Sharpe Ratio (Risk-Free Rate = 0)
@@ -202,9 +202,15 @@ class Backtesting:
     def save_operations(self, filename='results/operations_list.csv'):
         if not os.path.exists('results'):
             os.makedirs('results')
-        operations_df = pd.DataFrame(self.operations)
-        operations_df.to_csv(filename, index=False)
-        print(f"Operations saved to {filename}")
+
+        if self.operations:
+            operations_df = pd.DataFrame(self.operations)
+            if os.path.exists(filename):
+                existing_df = pd.read_csv(filename)
+                operations_df = pd.concat([existing_df, operations_df], ignore_index=True)
+
+            operations_df.to_csv(filename, index=False)
+            print(f"Operations saved to {filename}")
 
     def plot_strategy_values(self, portfolio_values, dates):
         if not os.path.exists('plots'):
