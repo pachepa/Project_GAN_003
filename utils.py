@@ -172,7 +172,7 @@ class Backtesting:
         # Sharpe Ratio (Risk-Free Rate = 0)
         data['Daily Returns'] = data['Close'].pct_change().fillna(0)
         std_dev = np.std(data['Daily Returns']) * np.sqrt(252)
-        sharpe_ratio = annualized_return / std_dev if std_dev != 0 else 0
+        sharpe_ratio = (annualized_return / std_dev)**0.5 if std_dev != 0 else 0
 
         # Max Drawdown
         data['Cumulative Value'] = (1 + data['Daily Returns']).cumprod() * initial_cash
@@ -274,8 +274,7 @@ def calculate_passive_benchmark(data, initial_cash=1_000_000, strategy_final_cas
     plt.show()
 
     # Calculate performance metrics
-    annual_sharpe_ratio = (data['Returns'].mean() - risk_free_rate) / data['Returns'].std() * np.sqrt(252) if data[
-                                                                                                                  'Returns'].std() != 0 else 0
+    annual_sharpe_ratio = ((data['Returns'].mean() - risk_free_rate) / (data['Returns'].std() * np.sqrt(252)))**0.5
     max_drawdown = (investment_values.min() - investment_values.max()) / investment_values.max()
     calmar_ratio = passive_return / abs(max_drawdown) if max_drawdown != 0 else 0
     wins = sum(1 for r in data['Returns'] if r > 0)
