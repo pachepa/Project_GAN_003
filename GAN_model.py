@@ -38,7 +38,7 @@ class GANModel:
         #model.compile(loss=self.loss_fn, optimizer=self.optimizer_disc)
         return model
 
-    def train(self, normalized_prices, epochs=1000, batch_size=32):  # Reduce epochs for testing
+    def train(self, normalized_prices, epochs=100, batch_size=32):  # Reduce epochs for testing
         yearly_prices = normalized_prices[:((len(normalized_prices) // 252) -1)*252].reshape(-1, 252)
         batch_size = len(yearly_prices)
         for epoch in range(epochs):
