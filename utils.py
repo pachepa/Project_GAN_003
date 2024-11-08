@@ -6,126 +6,89 @@ import os
 from mplfinance.original_flavor import candlestick_ohlc
 import matplotlib.dates as mdates
 
+
 class TradingStrategy:
-    def __init__(self, data_path=None):
+    def __init__(self):
         self.data = None
-        self.operations = []
-        self.cash = 1_000_000  # Initial cash for backtesting
-        self.strategy_value = [self.cash]  # Tracks portfolio value over time
-        self.n_shares = 10  # Number of shares per trade
-        self.commission = 0.00125  # Commission rate
-        self.indicators = {
-            'RSI': {'buy': self.rsi_buy_signal, 'sell': self.rsi_sell_signal},
-            'SMA': {'buy': self.sma_buy_signal, 'sell': self.sma_sell_signal},
-            'MACD': {'buy': self.macd_buy_signal, 'sell': self.macd_sell_signal}
-        }
+        self.operations = []  # Registro de operaciones
+        self.cash = 1_000_000  # Efectivo inicial
+        self.portfolio_value = [self.cash]  # Histórico de valor del portafolio
+        self.n_shares = 10  # Número de acciones por operación
+        self.commission = 0.00125  # Comisión por operación
         self.active_indicators = []
 
     def load_data(self, data):
         self.data = data.dropna().copy()
-        self.prepare_data_with_indicators()  # Prepare data by adding indicators
+        self.prepare_data_with_indicators()
 
     def prepare_data_with_indicators(self):
-        """Calculate and add required technical indicators to self.data."""
-        # RSI Calculation
         delta = self.data['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        gain = delta.where(delta > 0, 0).rolling(window=14).mean()
+        loss = -delta.where(delta < 0, 0).rolling(window=14).mean()
         rs = gain / loss
         self.data['RSI'] = 100 - (100 / (1 + rs))
 
-        # SMA Calculation
         self.data['SHORT_SMA'] = self.data['Close'].rolling(window=50).mean()
         self.data['LONG_SMA'] = self.data['Close'].rolling(window=200).mean()
-
-        # MACD Calculation
         short_ema = self.data['Close'].ewm(span=12, adjust=False).mean()
         long_ema = self.data['Close'].ewm(span=26, adjust=False).mean()
         self.data['MACD'] = short_ema - long_ema
         self.data['Signal_Line'] = self.data['MACD'].ewm(span=9, adjust=False).mean()
 
     def activate_indicator(self, indicator_name):
-        """Activate an indicator for trading strategy use."""
-        if indicator_name in self.indicators:
+        if indicator_name in ['RSI', 'SMA', 'MACD']:
             self.active_indicators.append(indicator_name)
 
-    # --- Signal Functions for Buy/Sell based on Indicators ---
-    def rsi_buy_signal(self, row):
-        return row.RSI < 30  # Buy when RSI < 30
-
-    def rsi_sell_signal(self, row):
-        return row.RSI > 70  # Sell when RSI > 70
-
-    def sma_buy_signal(self, row):
-        return row.SHORT_SMA > row.LONG_SMA  # Buy on short SMA crossover
-
-    def sma_sell_signal(self, row):
-        return row.SHORT_SMA < row.LONG_SMA  # Sell on short SMA cross under
-
-    def macd_buy_signal(self, row):
-        return row.MACD > row.Signal_Line
-
-    def macd_sell_signal(self, row):
-        return row.MACD < row.Signal_Line
-
-    def execute_trades(self, sl_levels, tp_levels):
+    def execute_trades(self, sl, tp):
         for i, row in self.data.iterrows():
-            # Check buy/sell signals for active indicators
-            buy_signals = sum([self.indicators[ind]['buy'](row) for ind in self.active_indicators])
-            sell_signals = sum([self.indicators[ind]['sell'](row) for ind in self.active_indicators])
-
-            # Execute trade if buy signals meet criteria
-            if buy_signals >= len(self.active_indicators) // 2:
-                self._open_operation('long', row)
-            elif sell_signals >= len(self.active_indicators) // 2 and self.operations:
+            buy_signal, sell_signal = self.evaluate_signals(row)
+            if buy_signal:
+                self._open_operation(row, sl, tp)
+            elif sell_signal and self.operations:
                 self._close_operations(row)
+            self._update_portfolio_value(row)
 
-            # Check if stop-loss or take-profit levels are reached and close positions
-            self._validate_stop_loss_take_profit(row)
+    def evaluate_signals(self, row):
+        buy_signals = sum([self.indicator_signal(ind, row, 'buy') for ind in self.active_indicators])
+        sell_signals = sum([self.indicator_signal(ind, row, 'sell') for ind in self.active_indicators])
+        buy_signal = buy_signals >= len(self.active_indicators) // 2
+        sell_signal = sell_signals >= len(self.active_indicators) // 2
+        return buy_signal, sell_signal
 
-            # Update portfolio value
-            self.strategy_value.append(
-                self.cash + sum(self._operation_value(op, row['Close']) for op in self.operations))
+    def indicator_signal(self, indicator, row, signal_type):
+        if indicator == 'RSI':
+            return row['RSI'] < 30 if signal_type == 'buy' else row['RSI'] > 70
+        elif indicator == 'SMA':
+            return row['SHORT_SMA'] > row['LONG_SMA'] if signal_type == 'buy' else row['SHORT_SMA'] < row['LONG_SMA']
+        elif indicator == 'MACD':
+            return row['MACD'] > row['Signal_Line'] if signal_type == 'buy' else row['MACD'] < row['Signal_Line']
+        return False
 
-    def _validate_stop_loss_take_profit(self, row):
-        for op in self.operations:
-            if row['Close'] <= op['stop_loss'] or row['Close'] >= op['take_profit']:
-                self.cash += row['Close'] * self.n_shares * (1 - self.commission)
-                self.operations.remove(op)  # Close the operation
-
-    def _open_operation(self, operation_type, row):
-        stop_loss = row['Close'] * 0.95
-        take_profit = row['Close'] * 1.05
+    def _open_operation(self, row, sl, tp):
+        entry_price = row['Close']
+        stop_loss = entry_price * sl
+        take_profit = entry_price * tp
         self.operations.append({
-            'type': operation_type,
+            'type': 'long',
             'Date': row['Date'],
-            'entry_price': row['Close'],
+            'entry_price': entry_price,
             'stop_loss': stop_loss,
             'take_profit': take_profit,
-            'n_shares': self.n_shares
+            'shares': self.n_shares
         })
-        self.cash -= row['Close'] * self.n_shares * (1 + self.commission)
+        self.cash -= entry_price * self.n_shares * (1 + self.commission)
 
     def _close_operations(self, row):
-        """Close all active operations."""
         for op in self.operations:
-            self.cash += row['Close'] * self.n_shares * (1 - self.commission)
+            exit_price = row['Close']
+            self.cash += exit_price * self.n_shares * (1 - self.commission)
         self.operations.clear()
 
-    def _operation_value(self, op, current_price):
-        if op['type'] == 'long':
-            return (current_price - op['entry_price']) * self.n_shares
-        else:
-            return (op['entry_price'] - current_price) * self.n_shares
-
-    # --- Plot Results ---
-    def plot_results(self):
-        plt.figure(figsize=(12, 8))
-        plt.plot(self.strategy_value)
-        plt.title('Trading Strategy Performance')
-        plt.xlabel('Trades')
-        plt.ylabel('Portfolio Value')
-        plt.show()
+    def _update_portfolio_value(self, row):
+        total_value = self.cash + sum(
+            (row['Close'] - op['entry_price']) * op['shares'] for op in self.operations
+        )
+        self.portfolio_value.append(total_value)
 
 
 class Backtesting:
@@ -143,22 +106,10 @@ class Backtesting:
         strategy = TradingStrategy()
         strategy.load_data(data)
         strategy.activate_indicator('RSI')
-
-        # Set strategy parameters
         strategy.n_shares = shares
-        print(f"Running backtest with SL: {sl}, TP: {tp}, Shares: {shares}")
-        strategy.execute_trades(sl_levels=[sl], tp_levels=[tp])
-
-        # Capture all portfolio values for plotting
-        portfolio_values = strategy.strategy_value.copy()
-
-        # Reset strategy for reuse
-        final_cash_balance = portfolio_values[-1]
-        strategy.operations.clear()
-        strategy.cash = 1_000_000
-        strategy.strategy_value = [strategy.cash]
-
-        return final_cash_balance, portfolio_values
+        strategy.execute_trades(sl=sl, tp=tp)
+        self.operations = strategy.operations  # Guardar operaciones
+        return strategy.portfolio_value, strategy.operations
 
     def run_all_sl_tp_variations(self):
         best_final_cash = None
@@ -170,22 +121,17 @@ class Backtesting:
             tp = round(random.uniform(1.01, 1.10), 2)
             shares = 100
 
-            final_cash_balance, portfolio_values = self.run_backtest_with_sl_tp(self.historical_data, sl, tp, shares)
+            portfolio_value, operations = self.run_backtest_with_sl_tp(self.historical_data, sl, tp, shares)
 
+            final_cash_balance = portfolio_value[-1]
             if best_final_cash is None or final_cash_balance > best_final_cash:
                 best_final_cash = final_cash_balance
                 best_params = {'stop_loss_pct': sl, 'take_profit_pct': tp, 'n_shares': shares}
-                best_portfolio_values = portfolio_values
-
-        print("Best parameters found:")
-        print(f"Stop Loss: {best_params['stop_loss_pct']}")
-        print(f"Take Profit: {best_params['take_profit_pct']}")
-        print(f"Number of Shares: {best_params['n_shares']}")
-        print(f"Final Cash Balance: {best_final_cash}")
+                best_portfolio_values = portfolio_value
 
         return best_final_cash, best_portfolio_values
 
-    def backtest_synthetic_scenarios(self, num_scenarios=10):
+    def backtest_synthetic_scenarios(self, num_scenarios=100, save_every_n=10):
         print(f"Starting backtesting on synthetic data ({num_scenarios} scenarios)...")
 
         for i in range(1, num_scenarios + 1):
@@ -197,13 +143,23 @@ class Backtesting:
             strategy.load_data(synthetic_scenario_data)
             strategy.cash = 1_000_000
             strategy.strategy_value = [strategy.cash]
-            # Run backtest with specific SL, TP, and n_shares values
-            final_cash_balance = self.run_backtest_with_sl_tp(
+
+            final_cash_balance, portfolio_values = self.run_backtest_with_sl_tp(
                 synthetic_scenario_data,
                 sl=0.95,  # Example stop-loss level for synthetic scenario testing
                 tp=1.05,  # Example take-profit level for synthetic scenario testing
                 shares=50  # Example number of shares for testing
             )
+
+            # Save operations for only every nth scenario
+            if i % save_every_n == 0:
+                self.operations.extend(strategy.operations)
+
+    def backtest_synthetic_scenarios(self, num_scenarios=10):
+        for i in range(1, num_scenarios + 1):
+            synthetic_data = self.historical_data.copy()
+            synthetic_data['Close'] = self.synthetic_data[f'Scenario_{i}']
+            portfolio_value, operations = self.run_backtest_with_sl_tp(synthetic_data, sl=0.95, tp=1.05, shares=50)
 
     def calculate_annual_performance(self, initial_cash, final_cash, data):
         p_and_l = final_cash - initial_cash

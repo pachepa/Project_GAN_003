@@ -74,8 +74,12 @@ class GANModel:
         return synthetic_df
 
 
+
 def main():
     data_path = 'cleaned_data_AMZN.csv'
+    synthetic_data_path = 'synthetic_data_AMZN.csv'
+
+    # Load and normalize data
     print("Loading data...")
     data = pd.read_csv(data_path)
     prices = data['Close'].values
@@ -89,10 +93,12 @@ def main():
     gan_model.train(normalized_prices)
     print("GAN training completed.")
 
+    # Generate synthetic data without saving it to a file
     print("Generating synthetic data...")
     synthetic_df = gan_model.generate_synthetic_data(n_scenarios=100)
     print("Synthetic data generation completed.")
 
+    # Plot synthetic data
     print("Plotting synthetic data...")
     plt.figure(figsize=(12, 6))
     for i in range(5):
@@ -108,31 +114,34 @@ def main():
     plt.close()
     print("Synthetic data plotting completed.")
 
+    # Initialize the backtester with historical data path and in-memory synthetic data
     print("Initializing backtester...")
-    backtester = Backtesting('cleaned_data_AMZN.csv', 'synthetic_data_AMZN.csv')
+    backtester = Backtesting(historical_data_path=data_path, synthetic_data_path=synthetic_data_path)
 
+    # Run backtest on synthetic data scenarios
     print("Running backtest on synthetic data scenarios...")
-    backtester.backtest_synthetic_scenarios(num_scenarios=100)  # Adjust the number of scenarios as needed
+    backtester.backtest_synthetic_scenarios(num_scenarios=100)
     print("Synthetic scenarios backtest completed.")
 
+    # Save the operations list for all scenarios
     print("Saving operations list...")
-    backtester.save_operations()  # Save the list of operations
+    backtester.save_operations()
     print("Operations list saved.")
 
+    # Run backtests with stop-loss and take-profit variations on historical data
     print("Generating performance plots...")
     final_cash_active_strategy, best_portfolio_values = backtester.run_all_sl_tp_variations()
     dates = backtester.historical_data['Date']
     print("Historical backtest with SL/TP variations completed.")
 
-    # Valores del portafolio y efectivo
+    # Plot portfolio values over time
     portfolio_values = best_portfolio_values
-
-    # Graficar los valores del portafolio y efectivo
     backtester.plot_strategy_values(portfolio_values, dates)
 
-    # Candlestick Chart
+    # Generate a candlestick chart of the historical data
     backtester.plot_candlestick_chart(backtester.historical_data)
 
+    # Calculate performance metrics for the active strategy
     print("\nCalculating annual performance metrics for active strategy...")
     strategy_metrics = backtester.calculate_annual_performance(
         initial_cash=1_000_000,
@@ -143,22 +152,25 @@ def main():
     for metric, value in strategy_metrics.items():
         print(f"  {metric}: {value:.4f}")
 
+    # Run benchmark passive strategy for comparison
     print("\nRunning benchmark passive strategy...")
     benchmark_metrics = calculate_passive_benchmark(data, strategy_final_cash=final_cash_active_strategy)
     print("Benchmark Passive Strategy Results:")
     for metric, value in benchmark_metrics.items():
         print(f"  {metric}: {value:.4f}")
 
-    # Save metrics to CSV
+    # Save metrics for both active and passive strategies to CSV
     metrics_table = pd.DataFrame({
         "Metric": list(strategy_metrics.keys()),
         "Active Strategy": list(strategy_metrics.values()),
         "Passive Strategy": list(benchmark_metrics.values())
     })
 
+    if not os.path.exists('results'):
+        os.makedirs('results')
     metrics_table.to_csv('results/performance_metrics.csv', index=False)
     print("Performance metrics saved to 'results/performance_metrics.csv'")
 
-
 if __name__ == "__main__":
     main()
+
