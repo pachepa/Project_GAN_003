@@ -11,7 +11,7 @@ class TradingStrategy:
     def __init__(self):
         self.data = None
         self.operations = []
-        self.cash = 1_000_000
+        self.cash = 1_000_000  # Initial cash
         self.portfolio_value = [self.cash]
         self.n_shares = 100
         self.commission = 0.00125
@@ -43,7 +43,7 @@ class TradingStrategy:
         for i, row in self.data.iterrows():
             buy_signal, sell_signal = self.evaluate_signals(row)
             if buy_signal:
-                self._open_operation(row, sl, tp)
+                self._validate_and_open(row, sl, tp)
             elif sell_signal and self.operations:
                 self._close_operations(row)
             self._update_portfolio_value(row)
@@ -64,6 +64,13 @@ class TradingStrategy:
             return row['MACD'] > row['Signal_Line'] if signal_type == 'buy' else row['MACD'] < row['Signal_Line']
         return False
 
+    def _validate_and_open(self, row, sl, tp):
+        entry_cost = row['Close'] * self.n_shares * (1 + self.commission)
+        if self.cash >= entry_cost:
+            self._open_operation(row, sl, tp)
+        else:
+            print(f"Insufficient funds to buy on {row['Date']}: Available Cash: {self.cash}, Required: {entry_cost}")
+
     def _open_operation(self, row, sl, tp):
         entry_price = row['Close']
         stop_loss = entry_price * sl
@@ -80,8 +87,7 @@ class TradingStrategy:
 
     def _close_operations(self, row):
         for op in self.operations:
-            exit_price = row['Close']
-            self.cash += exit_price * self.n_shares * (1 - self.commission)
+            self.cash += row['Close'] * op['shares'] * (1 - self.commission)
         self.operations.clear()
 
     def _update_portfolio_value(self, row):
